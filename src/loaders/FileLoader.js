@@ -1,16 +1,80 @@
 import { Cache } from './Cache.js';
 import { Loader } from './Loader.js';
+import { warn } from '../utils.js';
 
 const loading = {};
 
+class HttpError extends Error {
+
+	constructor( message, response ) {
+
+		super( message );
+		this.response = response;
+
+	}
+
+}
+
+/**
+ * A low level class for loading resources with the Fetch API, used internally by
+ * most loaders. It can also be used directly to load any file type that does
+ * not have a loader.
+ *
+ * This loader supports caching. If you want to use it, add `THREE.Cache.enabled = true;`
+ * once to your application.
+ *
+ * ```js
+ * const loader = new THREE.FileLoader();
+ * const data = await loader.loadAsync( 'example.txt' );
+ * ```
+ *
+ * @augments Loader
+ */
 class FileLoader extends Loader {
 
+	/**
+	 * Constructs a new file loader.
+	 *
+	 * @param {LoadingManager} [manager] - The loading manager.
+	 */
 	constructor( manager ) {
 
 		super( manager );
 
+		/**
+		 * The expected mime type. Valid values can be found
+		 * [here](https://developer.mozilla.org/en-US/docs/Web/API/DOMParser/parseFromString#mimetype)
+		 *
+		 * @type {string}
+		 */
+		this.mimeType = '';
+
+		/**
+		 * The expected response type.
+		 *
+		 * @type {('arraybuffer'|'blob'|'document'|'json'|'')}
+		 * @default ''
+		 */
+		this.responseType = '';
+
+		/**
+		 * Used for aborting requests.
+		 *
+		 * @private
+		 * @type {AbortController}
+		 */
+		this._abortController = new AbortController();
+
 	}
 
+	/**
+	 * Starts loading from the given URL and pass the loaded response to the `onLoad()` callback.
+	 *
+	 * @param {string} url - The path/URL of the file to be loaded. This can also be a data URI.
+	 * @param {function(any)} onLoad - Executed when the loading process has been finished.
+	 * @param {onProgressCallback} [onProgress] - Executed while the loading is in progress.
+	 * @param {onErrorCallback} [onError] - Executed when errors occur.
+	 */
 	load( url, onLoad, onProgress, onError ) {
 
 		if ( url === undefined ) url = '';
@@ -19,7 +83,7 @@ class FileLoader extends Loader {
 
 		url = this.manager.resolveURL( url );
 
-		const cached = Cache.get( url );
+		const cached = Cache.get( `file:${url}` );
 
 		if ( cached !== undefined ) {
 
@@ -33,7 +97,7 @@ class FileLoader extends Loader {
 
 			}, 0 );
 
-			return cached;
+			return;
 
 		}
 
@@ -66,8 +130,14 @@ class FileLoader extends Loader {
 		const req = new Request( url, {
 			headers: new Headers( this.requestHeader ),
 			credentials: this.withCredentials ? 'include' : 'same-origin',
-			// An abort controller could be added within a future PR
+			priority: this.priority,
+			cache: this.cache,
+			signal: ( typeof AbortSignal.any === 'function' ) ? AbortSignal.any( [ this._abortController.signal, this.manager.abortController.signal ] ) : this._abortController.signal
 		} );
+
+		// record states ( avoid data race )
+		const mimeType = this.mimeType;
+		const responseType = this.responseType;
 
 		// start the fetch
 		fetch( req )
@@ -80,19 +150,30 @@ class FileLoader extends Loader {
 
 					if ( response.status === 0 ) {
 
-						console.warn( 'THREE.FileLoader: HTTP Status 0 received.' );
+						warn( 'FileLoader: HTTP Status 0 received.' );
+
+					}
+
+					// Workaround: Checking if response.body === undefined for Alipay browser #23548
+
+					if ( typeof ReadableStream === 'undefined' || response.body === undefined || response.body.getReader === undefined ) {
+
+						return response;
 
 					}
 
 					const callbacks = loading[ url ];
 					const reader = response.body.getReader();
-					const contentLength = response.headers.get( 'Content-Length' );
+
+					// Nginx needs X-File-Size check
+					// https://serverfault.com/questions/482875/why-does-nginx-remove-content-length-header-for-chunked-content
+					const contentLength = response.headers.get( 'X-File-Size' ) || response.headers.get( 'Content-Length' );
 					const total = contentLength ? parseInt( contentLength ) : 0;
 					const lengthComputable = total !== 0;
 					let loaded = 0;
 
 					// periodically read data into the new stream tracking while download progress
-					return new ReadableStream( {
+					const stream = new ReadableStream( {
 						start( controller ) {
 
 							readData();
@@ -122,6 +203,10 @@ class FileLoader extends Loader {
 
 									}
 
+								}, ( e ) => {
+
+									controller.error( e );
+
 								} );
 
 							}
@@ -130,18 +215,18 @@ class FileLoader extends Loader {
 
 					} );
 
+					return new Response( stream );
+
 				} else {
 
-					throw Error( `fetch for "${response.url}" responded with ${response.status}: ${response.statusText}` );
+					throw new HttpError( `fetch for "${response.url}" responded with ${response.status}: ${response.statusText}`, response );
 
 				}
 
 			} )
-			.then( stream => {
+			.then( response => {
 
-				const response = new Response( stream );
-
-				switch ( this.responseType ) {
+				switch ( responseType ) {
 
 					case 'arraybuffer':
 
@@ -157,7 +242,7 @@ class FileLoader extends Loader {
 							.then( text => {
 
 								const parser = new DOMParser();
-								return parser.parseFromString( text, this.mimeType );
+								return parser.parseFromString( text, mimeType );
 
 							} );
 
@@ -167,7 +252,20 @@ class FileLoader extends Loader {
 
 					default:
 
-						return response.text();
+						if ( mimeType === '' ) {
+
+							return response.text();
+
+						} else {
+
+							// sniff encoding
+							const re = /charset="?([^;"\s]*)"?/i;
+							const exec = re.exec( mimeType );
+							const label = exec && exec[ 1 ] ? exec[ 1 ].toLowerCase() : undefined;
+							const decoder = new TextDecoder( label );
+							return response.arrayBuffer().then( ab => decoder.decode( ab ) );
+
+						}
 
 				}
 
@@ -176,7 +274,7 @@ class FileLoader extends Loader {
 
 				// Add to cache only on HTTP success, so that we do not cache
 				// error response bodies as proper responses to requests.
-				Cache.add( url, data );
+				Cache.add( `file:${url}`, data );
 
 				const callbacks = loading[ url ];
 				delete loading[ url ];
@@ -188,14 +286,21 @@ class FileLoader extends Loader {
 
 				}
 
-				this.manager.itemEnd( url );
-
 			} )
 			.catch( err => {
 
 				// Abort errors and other errors are handled the same
 
 				const callbacks = loading[ url ];
+
+				if ( callbacks === undefined ) {
+
+					// When onLoad was called and url was deleted in `loading`
+					this.manager.itemError( url );
+					throw err;
+
+				}
+
 				delete loading[ url ];
 
 				for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
@@ -206,6 +311,10 @@ class FileLoader extends Loader {
 				}
 
 				this.manager.itemError( url );
+
+			} )
+			.finally( () => {
+
 				this.manager.itemEnd( url );
 
 			} );
@@ -214,6 +323,12 @@ class FileLoader extends Loader {
 
 	}
 
+	/**
+	 * Sets the expected response type.
+	 *
+	 * @param {('arraybuffer'|'blob'|'document'|'json'|'')} value - The response type.
+	 * @return {FileLoader} A reference to this file loader.
+	 */
 	setResponseType( value ) {
 
 		this.responseType = value;
@@ -221,9 +336,29 @@ class FileLoader extends Loader {
 
 	}
 
+	/**
+	 * Sets the expected mime type of the loaded file.
+	 *
+	 * @param {string} value - The mime type.
+	 * @return {FileLoader} A reference to this file loader.
+	 */
 	setMimeType( value ) {
 
 		this.mimeType = value;
+		return this;
+
+	}
+
+	/**
+	 * Aborts ongoing fetch requests.
+	 *
+	 * @return {FileLoader} A reference to this instance.
+	 */
+	abort() {
+
+		this._abortController.abort();
+		this._abortController = new AbortController();
+
 		return this;
 
 	}

@@ -4,6 +4,10 @@
 		<title>three.js webgl - geometry - catmull spline editor</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgl - geometry - catmull spline editor">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgl_geometry_spline_editor.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgl_geometry_spline_editor.jpg">
 		<link type="text/css" rel="stylesheet" href="main.css">
 		<style>
 			body {
@@ -22,14 +26,23 @@
 			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - geometry - catmull spline editor
 		</div>
 
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
 		<script type="module">
 
-			import * as THREE from '../build/three.module.js';
+			import * as THREE from 'three';
 
-			import { GUI } from './jsm/libs/lil-gui.module.min.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			import { OrbitControls } from './jsm/controls/OrbitControls.js';
-			import { TransformControls } from './jsm/controls/TransformControls.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 			let container;
 			let camera, scene, renderer;
@@ -73,10 +86,11 @@
 				camera.position.set( 0, 250, 1000 );
 				scene.add( camera );
 
-				scene.add( new THREE.AmbientLight( 0xf0f0f0 ) );
-				const light = new THREE.SpotLight( 0xffffff, 1.5 );
+				scene.add( new THREE.AmbientLight( 0xf0f0f0, 3 ) );
+				const light = new THREE.SpotLight( 0xffffff, 4.5 );
 				light.position.set( 0, 1500, 200 );
 				light.angle = Math.PI * 0.2;
+				light.decay = 0;
 				light.castShadow = true;
 				light.shadow.camera.near = 200;
 				light.shadow.camera.far = 2000;
@@ -87,7 +101,7 @@
 
 				const planeGeometry = new THREE.PlaneGeometry( 2000, 2000 );
 				planeGeometry.rotateX( - Math.PI / 2 );
-				const planeMaterial = new THREE.ShadowMaterial( { opacity: 0.2 } );
+				const planeMaterial = new THREE.ShadowMaterial( { color: 0x000000, opacity: 0.2 } );
 
 				const plane = new THREE.Mesh( planeGeometry, planeMaterial );
 				plane.position.y = - 200;
@@ -135,7 +149,7 @@
 					controls.enabled = ! event.value;
 
 				} );
-				scene.add( transformControl );
+				scene.add( transformControl.getHelper() );
 
 				transformControl.addEventListener( 'objectChange', function () {
 
@@ -350,12 +364,17 @@
 
 			}
 
-			function onPointerUp() {
+			function onPointerUp( event ) {
 
 				onUpPosition.x = event.clientX;
 				onUpPosition.y = event.clientY;
 
-				if ( onDownPosition.distanceTo( onUpPosition ) === 0 ) transformControl.detach();
+				if ( onDownPosition.distanceTo( onUpPosition ) === 0 ) {
+
+					transformControl.detach();
+					render();
+
+				}
 
 			}
 

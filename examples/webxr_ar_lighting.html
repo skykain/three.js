@@ -4,28 +4,39 @@
 		<title>three.js ar - lighting estimation</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<meta property="og:title" content="three.js ar - lighting estimation">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webxr_ar_lighting.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webxr_ar_lighting.jpg">
 		<link type="text/css" rel="stylesheet" href="main.css">
 	</head>
 	<body>
 
 		<div id="info">
-			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> ar - Lighting Estimation<br/>
-			(Chrome Android 90+)
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> ar - lighting estimation<br/>
 		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
 
 		<script type="module">
 
-			import * as THREE from '../build/three.module.js';
-			import { RGBELoader } from './jsm/loaders/RGBELoader.js';
-			import { ARButton } from './jsm/webxr/ARButton.js';
-			import { XREstimatedLight } from './jsm/webxr/XREstimatedLight.js';
+			import * as THREE from 'three';
+			import { UltraHDRLoader } from 'three/addons/loaders/UltraHDRLoader.js';
+			import { ARButton } from 'three/addons/webxr/ARButton.js';
+			import { XREstimatedLight } from 'three/addons/webxr/XREstimatedLight.js';
 
 			let camera, scene, renderer;
 			let controller;
 			let defaultEnvironment;
 
 			init();
-			animate();
 
 			function init() {
 
@@ -36,7 +47,8 @@
 
 				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.01, 20 );
 
-				const defaultLight = new THREE.AmbientLight( 0xffffff );
+				const defaultLight = new THREE.HemisphereLight( 0xffffff, 0xbbbbff, 1 );
+				defaultLight.position.set( 0.5, 1, 0.25 );
 				scene.add( defaultLight );
 
 				//
@@ -44,8 +56,7 @@
 				renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
-				renderer.outputEncoding = THREE.sRGBEncoding;
-				renderer.physicallyCorrectLights = true;
+				renderer.setAnimationLoop( animate );
 				renderer.xr.enabled = true;
 				container.appendChild( renderer.domElement );
 
@@ -56,14 +67,14 @@
 
 				xrLight.addEventListener( 'estimationstart', () => {
 
-					// Swap the default light out for the estimated one one we start getting some estimated values.
+					// Swap the default light out for the estimated one once we start getting some estimated values.
 					scene.add( xrLight );
 					scene.remove( defaultLight );
 
 					// The estimated lighting also provides an environment cubemap, which we can apply here.
 					if ( xrLight.environment ) {
 
-						updateEnvironment( xrLight.environment );
+						scene.environment = xrLight.environment;
 
 					}
 
@@ -76,22 +87,21 @@
 					scene.remove( xrLight );
 
 					// Revert back to the default environment.
-					updateEnvironment( defaultEnvironment );
+					scene.environment = defaultEnvironment;
 
 				} );
 
 				//
 
-				new RGBELoader()
-					.setDataType( THREE.UnsignedByteType )
+				new UltraHDRLoader()
 					.setPath( 'textures/equirectangular/' )
-					.load( 'royal_esplanade_1k.hdr', function ( texture ) {
+					.load( 'royal_esplanade_2k.hdr.jpg', function ( texture ) {
 
 						texture.mapping = THREE.EquirectangularReflectionMapping;
 
 						defaultEnvironment = texture;
 
-						updateEnvironment( defaultEnvironment );
+						scene.environment = defaultEnvironment;
 
 					} );
 
@@ -102,20 +112,21 @@
 
 				//
 
-				const ballGeometry = new THREE.SphereBufferGeometry( 0.175, 32, 32 );
+				const ballGeometry = new THREE.SphereGeometry( 0.175, 32, 32 );
 				const ballGroup = new THREE.Group();
 				ballGroup.position.z = - 2;
 
-				const rows = 1;
-				const cols = 4;
+				const rows = 3;
+				const cols = 3;
 
 				for ( let i = 0; i < rows; i ++ ) {
 
 					for ( let j = 0; j < cols; j ++ ) {
 
-						const ballMaterial = new THREE.MeshPhongMaterial( {
+						const ballMaterial = new THREE.MeshStandardMaterial( {
 							color: 0xdddddd,
-							reflectivity: j / cols
+							roughness: i / rows,
+							metalness: j / cols
 						} );
 						const ballMesh = new THREE.Mesh( ballGeometry, ballMaterial );
 						ballMesh.position.set( ( i + 0.5 - rows * 0.5 ) * 0.4, ( j + 0.5 - cols * 0.5 ) * 0.4, 0 );
@@ -159,27 +170,9 @@
 
 			function animate() {
 
-				renderer.setAnimationLoop( render );
-
-			}
-
-			function render() {
-
 				renderer.render( scene, camera );
 
 			}
-
-			function updateEnvironment( envMap ) {
-
-				scene.traverse( function ( object ) {
-
-					if ( object.isMesh ) object.material.envMap = envMap;
-
-
-				} );
-
-			}
-
 
 		</script>
 	</body>
